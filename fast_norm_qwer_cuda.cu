@@ -89,11 +89,14 @@ __global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, floa
 
         float sum_x2 = 0.f;
         float sum_xdyw = 0.f;
-        for (int i = 0; i * BLOCK_DIM_X < H; i++) {
-            int idx = b_id * H + i * BLOCK_DIM_X + threadIdx.x;
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int idx = b_id * H / 2 + i * BLOCK_DIM_X + threadIdx.x;
             int widx = i * BLOCK_DIM_X + threadIdx.x;
-            sum_x2 += (float)input[idx] * (float)input[idx];
-            sum_xdyw += (float)input[idx] * (float)grad_output[idx] * (float)weight[widx];
+            __nv_bfloat162 inp = reinterpret_cast<__nv_bfloat162 const *>(input)[idx];
+            __nv_bfloat162 grad_out = reinterpret_cast<__nv_bfloat162 const *>(grad_output)[idx];
+            __nv_bfloat162 w = reinterpret_cast<__nv_bfloat162 const *>(weight)[widx];
+            sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
+            sum_xdyw += (float)inp.x * (float)grad_out.x * (float)w.x + (float)inp.y * (float)grad_out.y * (float)w.y;
         }
 
         sum_x2 = blockReduceSum(sum_x2);
@@ -109,16 +112,24 @@ __global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, floa
         float rnorm = shared_rnorm;
         sum_xdyw = shared_sum_xdyw;
 
-        for (int i = 0; i * BLOCK_DIM_X < H; i++) {
-            int idx = b_id * H + i * BLOCK_DIM_X + threadIdx.x;
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int idx = b_id * H / 2 + i * BLOCK_DIM_X + threadIdx.x;
             int widx = i * BLOCK_DIM_X + threadIdx.x;
-            grad_input[idx] = rnorm * ((float)weight[widx] * (float)grad_output[idx] - (float)input[idx] * rnorm * rnorm * sum_xdyw / H);
-            frag_grad_weight_buffer[i] += rnorm * (float)input[idx] * (float)grad_output[idx];
+            __nv_bfloat162 inp = reinterpret_cast<__nv_bfloat162 const *>(input)[idx];
+            __nv_bfloat162 grad_out = reinterpret_cast<__nv_bfloat162 const *>(grad_output)[idx];
+            __nv_bfloat162 w = reinterpret_cast<__nv_bfloat162 const *>(weight)[widx];
+            __nv_bfloat162 grad_inp;
+            grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - (float)inp.x * rnorm * rnorm * sum_xdyw / H);
+            grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - (float)inp.y * rnorm * rnorm * sum_xdyw / H);
+            reinterpret_cast<__nv_bfloat162 *>(grad_input)[idx] = grad_inp;
+            frag_grad_weight_buffer[i * 2 + 0] += rnorm * (float)inp.x * (float)grad_out.x;
+            frag_grad_weight_buffer[i * 2 + 1] += rnorm * (float)inp.y * (float)grad_out.y;
         }
     }
 
-    for (int i = 0; i * BLOCK_DIM_X < H; i++) {
-        grad_weight_buffer[blockIdx.x * H + i * BLOCK_DIM_X + threadIdx.x] = frag_grad_weight_buffer[i];
+    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+        reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * H / 2 + i * BLOCK_DIM_X + threadIdx.x] =
+            reinterpret_cast<float2 const *>(frag_grad_weight_buffer)[i];
     }
 }
 
@@ -164,7 +175,7 @@ void rms_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_b
 }
 
 void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, cudaStream_t stream) {
-    constexpr int ROWS_PER_CTA = 4;
+    constexpr int ROWS_PER_CTA = 8;
     constexpr int BLOCK_DIM_X = 512;
 #define SWITCH_H(H) \
     if (h == H) { \
