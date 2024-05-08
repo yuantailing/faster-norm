@@ -6,7 +6,8 @@ This library is under development. Currently, only some special cases are suppor
 
 - [x] RMSNorm
 - [ ] LayerNorm
-- [ ] More dtypes
+- [x] Float16 and BFloat16
+- [ ] More data types
 - [x] More shapes
 - [ ] Accelerate if no wgrad
 - [ ] Performance tuning

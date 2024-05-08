@@ -9,6 +9,21 @@
 
 namespace fast_norm_cuda {
 
+template<typename T>
+class PackTwo;
+
+template<>
+class PackTwo<__nv_bfloat16> {
+public:
+    using type = __nv_bfloat162;
+};
+
+template<>
+class PackTwo<half> {
+public:
+    using type = half2;
+};
+
 #define FINAL_MASK 0xffffffff
 
 template<typename T>
@@ -43,15 +58,16 @@ __inline__ __device__ T blockReduceSum(T val)
     return val;
 }
 
-template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H>
-__global__ void rms_norm_fwd_kernel(__nv_bfloat16 *__restrict__ output, __nv_bfloat16 const *__restrict__ input, __nv_bfloat16 const *__restrict__ weight, float eps, int64_t b, int64_t h) {
+template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, typename T>
+__global__ void rms_norm_fwd_kernel(T *__restrict__ output, T const *__restrict__ input, T const *__restrict__ weight, float eps, int64_t b, int64_t h) {
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
+    using T2 = typename PackTwo<T>::type;
 
-    __nv_bfloat162 frag_weight[H / 2 / BLOCK_DIM_X];
+    T2 frag_weight[H / 2 / BLOCK_DIM_X];
     for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
         int widx = i * BLOCK_DIM_X + threadIdx.x;
         if (widx * 2 < h) {
-            frag_weight[i] = reinterpret_cast<__nv_bfloat162 const *>(weight)[widx];
+            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
         }
     }
 
@@ -59,11 +75,11 @@ __global__ void rms_norm_fwd_kernel(__nv_bfloat16 *__restrict__ output, __nv_bfl
         int b_id = blockIdx.x * ROWS_PER_CTA + i_b;
         float sum_x2 = 0.f;
 
-        __nv_bfloat162 frag_input[H / 2 / BLOCK_DIM_X];
+        T2 frag_input[H / 2 / BLOCK_DIM_X];
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx * 2 < h) {
-                __nv_bfloat162 inp = reinterpret_cast<__nv_bfloat162 const *>(input)[b_id * h / 2 + widx];
+                T2 inp = reinterpret_cast<T2 const *>(input)[b_id * h / 2 + widx];
                 sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
                 frag_input[i] = inp;
             }
@@ -80,28 +96,29 @@ __global__ void rms_norm_fwd_kernel(__nv_bfloat16 *__restrict__ output, __nv_bfl
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx * 2 < h) {
-                __nv_bfloat162 inp = frag_input[i];
-                __nv_bfloat162 w = frag_weight[i];
-                __nv_bfloat162 o;
+                T2 inp = frag_input[i];
+                T2 w = frag_weight[i];
+                T2 o;
                 o.x = (float)inp.x * multiplier * (float)w.x;
                 o.y = (float)inp.y * multiplier * (float)w.y;
-                reinterpret_cast<__nv_bfloat162 *>(output)[b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x] = o;
+                reinterpret_cast<T2 *>(output)[b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x] = o;
             }
         }
     }
 }
 
-template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H>
-__global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, __nv_bfloat16 const *__restrict__ input, __nv_bfloat16 const *__restrict__ weight, __nv_bfloat16 const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
+template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, typename T>
+__global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
+    using T2 = typename PackTwo<T>::type;
 
     float frag_grad_weight_buffer[H / BLOCK_DIM_X] = {0};
 
-    __nv_bfloat162 frag_weight[H / 2 / BLOCK_DIM_X];
+    T2 frag_weight[H / 2 / BLOCK_DIM_X];
     for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
         int widx = i * BLOCK_DIM_X + threadIdx.x;
         if (widx * 2 < h) {
-            frag_weight[i] = reinterpret_cast<__nv_bfloat162 const *>(weight)[widx];
+            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
         }
     }
 
@@ -111,15 +128,15 @@ __global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, floa
         float sum_x2 = 0.f;
         float sum_xdyw = 0.f;
 
-        __nv_bfloat162 frag_input[H / 2 / BLOCK_DIM_X];
-        __nv_bfloat162 frag_grad_out[H / 2 / BLOCK_DIM_X];
+        T2 frag_input[H / 2 / BLOCK_DIM_X];
+        T2 frag_grad_out[H / 2 / BLOCK_DIM_X];
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx * 2 < h) {
                 int idx = b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x;
-                __nv_bfloat162 inp = reinterpret_cast<__nv_bfloat162 const *>(input)[idx];
-                __nv_bfloat162 grad_out = reinterpret_cast<__nv_bfloat162 const *>(grad_output)[idx];
-                __nv_bfloat162 w = frag_weight[i];
+                T2 inp = reinterpret_cast<T2 const *>(input)[idx];
+                T2 grad_out = reinterpret_cast<T2 const *>(grad_output)[idx];
+                T2 w = frag_weight[i];
                 sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
                 sum_xdyw += (float)inp.x * (float)grad_out.x * (float)w.x + (float)inp.y * (float)grad_out.y * (float)w.y;
                 frag_input[i] = inp;
@@ -144,13 +161,13 @@ __global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, floa
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx * 2 < h) {
                 int idx = b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x;
-                __nv_bfloat162 inp = frag_input[i];
-                __nv_bfloat162 grad_out = frag_grad_out[i];
-                __nv_bfloat162 w = frag_weight[i];
-                __nv_bfloat162 grad_inp;
+                T2 inp = frag_input[i];
+                T2 grad_out = frag_grad_out[i];
+                T2 w = frag_weight[i];
+                T2 grad_inp;
                 grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - (float)inp.x * rnorm * rnorm * sum_xdyw / h);
                 grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - (float)inp.y * rnorm * rnorm * sum_xdyw / h);
-                reinterpret_cast<__nv_bfloat162 *>(grad_input)[idx] = grad_inp;
+                reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 frag_grad_weight_buffer[i * 2 + 0] += rnorm * (float)inp.x * (float)grad_out.x;
                 frag_grad_weight_buffer[i * 2 + 1] += rnorm * (float)inp.y * (float)grad_out.y;
             }
@@ -166,8 +183,9 @@ __global__ void rms_norm_bwd_kernel(__nv_bfloat16 *__restrict__ grad_input, floa
     }
 }
 
-template<int H>
-__global__ void sum_axis_0_kernel(__nv_bfloat16 *__restrict__ output, float const *__restrict__ input, int rows, int64_t h) {
+template<typename T>
+__global__ void sum_axis_0_kernel(T *__restrict__ output, float const *__restrict__ input, int rows, int64_t h) {
+    using T2 = typename PackTwo<T>::type;
     int warp = threadIdx.x / 32;
     int lane = threadIdx.x % 32;
     float sum = 0.f;
@@ -189,15 +207,16 @@ __global__ void sum_axis_0_kernel(__nv_bfloat16 *__restrict__ output, float cons
     if (warp == 0 && lane < 16) {
         int widx = blockIdx.x * 16 + lane;
         if (widx * 2 < h) {
-            __nv_bfloat162 o;
+            T2 o;
             o.x = shared_sum[0][lane * 2];
             o.y = shared_sum[0][lane * 2 + 1];
-            reinterpret_cast<__nv_bfloat162 *>(output)[blockIdx.x * 16 + lane] = o;
+            reinterpret_cast<T2 *>(output)[blockIdx.x * 16 + lane] = o;
         }
     }
 }
 
-void rms_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream) {
+template<typename T>
+void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream) {
     if (h % 2 != 0) {
         throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
     }
@@ -228,7 +247,8 @@ void rms_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_b
 #undef SWITCH_H
 }
 
-void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, cudaStream_t stream) {
+template<typename T>
+void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer, T const *input, T const *weight, T const *grad_output, float eps, int64_t b, int64_t h, cudaStream_t stream) {
     if (h % 2 != 0) {
         throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
     }
@@ -237,7 +257,7 @@ void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, fl
     if (h <= (H)) { \
         rms_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, grad_output, eps, b, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
-        sum_axis_0_kernel<H><<<(H) / 32, 1024, 0, stream>>>(grad_weight, grad_weight_buffer, b / ROWS_PER_CTA, h); \
+        sum_axis_0_kernel<<<(H) / 32, 1024, 0, stream>>>(grad_weight, grad_weight_buffer, b / ROWS_PER_CTA, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
     }
@@ -260,5 +280,11 @@ void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, fl
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
+
+template void rms_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream);
+template void rms_norm_fwd_cuda(half *output, half const *input, half const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream);
+
+template void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, cudaStream_t stream);
+template void rms_norm_bwd_cuda(half *grad_input, half *grad_weight, float *grad_weight_buffer, half const *input, half const *weight, half const *grad_output, float eps, int64_t b, int64_t h, cudaStream_t stream);
 
 }
