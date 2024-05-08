@@ -1,10 +1,13 @@
+import pathlib
 import torch
 import torch.utils.cpp_extension
 
 
+srcpath = pathlib.Path(__file__).parent.absolute()
+
 fast_norm_qwer_cuda = torch.utils.cpp_extension.load(
     "fast_norm_qwer_cuda",
-    sources=["fast_norm_qwer.cpp", "fast_norm_qwer_cuda.cu"],
+    sources=[srcpath / "fast_norm_qwer.cpp", srcpath / "fast_norm_qwer_cuda.cu"],
     extra_cuda_cflags=["-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__", "-O2", "-fmad=false"],
     verbose=1,
 )

@@ -1,7 +1,14 @@
 # fast-norm-qwer
+
 A fast, yet specialized, RMSNorm/LayerNorm implementation
 
 This library is under development. Currently, only some special cases are supported, and the performance is not yet fully optimized.
+
+- [x] RMSNorm
+- [ ] LayerNorm
+- [ ] More shapes
+- [ ] Performance tuning
+
 
 ## Statement
 
