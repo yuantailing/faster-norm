@@ -6,7 +6,9 @@ This library is under development. Currently, only some special cases are suppor
 
 - [x] RMSNorm
 - [ ] LayerNorm
-- [ ] More shapes
+- [ ] More dtypes
+- [x] More shapes
+- [ ] Accelerate if no wgrad
 - [ ] Performance tuning
 
 
