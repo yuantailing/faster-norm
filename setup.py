@@ -16,7 +16,7 @@ with open("README.md", "r") as fp:
 
 
 setup(name="fast_norm_cuda",
-      version="0.1.0",
+      version="0.2.0",
       author="Tailing Yuan",
       author_email="yuantailing@gmail.com",
       url="https://github.com/yuantailing/fast-norm-cuda",
