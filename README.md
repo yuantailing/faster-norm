@@ -1,4 +1,4 @@
-# fast-norm-qwer
+# fast-norm-cuda
 
 A fast, yet specialized, RMSNorm/LayerNorm implementation
 

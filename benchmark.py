@@ -1,7 +1,7 @@
 import torch
 
 from apex.contrib.layer_norm.layer_norm import FastRMSNormFN
-from fast_norm_qwer import fast_rms_norm_qwer
+from fast_norm_cuda import fast_rms_norm_cuda
 
 
 torch.manual_seed(42)
@@ -45,7 +45,7 @@ for do_backward in [False, True]:
             ("rms_norm_native", rms_norm),
             ("rms_norm_compiled", rms_norm_compiled),
             ("FastRMSNormFN", fast_rms_norm),
-            ("fast_rms_norm_qwer", fast_rms_norm_qwer),
+            ("fast_rms_norm_cuda", fast_rms_norm_cuda),
         ]:
             warmup_times = 5
             run_times = 20

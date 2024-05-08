@@ -1,1 +1,1 @@
-include fast_norm_qwer/fast_norm_qwer*
+include fast_norm_cuda/fast_norm*

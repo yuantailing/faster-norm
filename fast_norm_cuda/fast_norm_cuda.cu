@@ -1,4 +1,4 @@
-#include "fast_norm_qwer.hpp"
+#include "fast_norm.hpp"
 
 #include <stdio.h>
 #include <stdexcept>
@@ -7,7 +7,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 
-namespace fast_norm_qwer {
+namespace fast_norm_cuda {
 
 #define FINAL_MASK 0xffffffff
 
