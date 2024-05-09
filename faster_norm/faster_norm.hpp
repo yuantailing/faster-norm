@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 
-namespace fast_norm_cuda {
+namespace faster_norm {
 
 template<typename T>
 void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream);

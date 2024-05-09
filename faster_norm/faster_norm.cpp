@@ -1,9 +1,9 @@
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 
-#include "fast_norm.hpp"
+#include "faster_norm.hpp"
 
-namespace fast_norm_cuda {
+namespace faster_norm {
 
 torch::Tensor rms_norm_fwd(torch::Tensor input, torch::Tensor weight, float eps) {
     if (input.dtype() != weight.dtype()) {
@@ -71,6 +71,6 @@ std::tuple<torch::Tensor, torch::Tensor> rms_norm_bwd(torch::Tensor input, torch
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("rms_norm_fwd", &fast_norm_cuda::rms_norm_fwd, "rms_norm forward");
-  m.def("rms_norm_bwd", &fast_norm_cuda::rms_norm_bwd, "rms_norm backward");
+  m.def("rms_norm_fwd", &faster_norm::rms_norm_fwd, "rms_norm forward");
+  m.def("rms_norm_bwd", &faster_norm::rms_norm_bwd, "rms_norm backward");
 }

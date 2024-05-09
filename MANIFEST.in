@@ -1,1 +1,1 @@
-include fast_norm_cuda/fast_norm*
+include faster_norm/faster_norm*

@@ -15,11 +15,11 @@ with open("README.md", "r") as fp:
     long_description = fp.read()
 
 
-setup(name="fast_norm_cuda",
-      version="0.2.0",
+setup(name="faster_norm",
+      version="0.2.1",
       author="Tailing Yuan",
       author_email="yuantailing@gmail.com",
-      url="https://github.com/yuantailing/fast-norm-cuda",
+      url="https://github.com/yuantailing/faster-norm",
       tests_require=["pytest", "torch"],
       description="A fast, yet specialized, RMSNorm/LayerNorm implementation",
       long_description=long_description,
