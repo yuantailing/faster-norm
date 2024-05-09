@@ -40,31 +40,31 @@ std::tuple<torch::Tensor, torch::Tensor> rms_norm_bwd(torch::Tensor input, torch
     }
     int64_t b = input.size(0);
     int64_t h = input.size(1);
-    bool requires_dw = weight.requires_grad();
+    bool requires_wgrad = weight.requires_grad();
     torch::Tensor grad_input = torch::empty_like(input);
     torch::Tensor grad_weight = torch::empty_like(weight);
     torch::Tensor grad_weight_buffer;
-    if (requires_dw)
+    if (requires_wgrad)
         grad_weight_buffer = torch::empty_like(input, torch::TensorOptions().dtype(torch::kFloat32));
     cudaStream_t stream = c10::cuda::getDefaultCUDAStream().stream();
     if (input.dtype() == torch::kFloat16) {
         rms_norm_bwd_cuda(
             reinterpret_cast<half *>(grad_input.data_ptr()),
             reinterpret_cast<half *>(grad_weight.data_ptr()),
-            requires_dw ? reinterpret_cast<float *>(grad_weight_buffer.data_ptr()) : nullptr,
+            requires_wgrad ? reinterpret_cast<float *>(grad_weight_buffer.data_ptr()) : nullptr,
             reinterpret_cast<half const *>(input.data_ptr()),
             reinterpret_cast<half const *>(weight.data_ptr()),
             reinterpret_cast<half const *>(grad_output.data_ptr()),
-            eps, b, h, requires_dw, stream);
+            eps, b, h, requires_wgrad, stream);
     } else if (input.dtype() == torch::kBFloat16) {
         rms_norm_bwd_cuda(
             reinterpret_cast<__nv_bfloat16 *>(grad_input.data_ptr()),
             reinterpret_cast<__nv_bfloat16 *>(grad_weight.data_ptr()),
-            requires_dw ? reinterpret_cast<float *>(grad_weight_buffer.data_ptr()) : nullptr,
+            requires_wgrad ? reinterpret_cast<float *>(grad_weight_buffer.data_ptr()) : nullptr,
             reinterpret_cast<__nv_bfloat16 const *>(input.data_ptr()),
             reinterpret_cast<__nv_bfloat16 const *>(weight.data_ptr()),
             reinterpret_cast<__nv_bfloat16 const *>(grad_output.data_ptr()),
-            eps, b, h, requires_dw, stream);
+            eps, b, h, requires_wgrad, stream);
     } else {
         throw std::invalid_argument("unsupported dtype " + std::string(c10::toString(input.dtype().toScalarType())));
     }
