@@ -9,7 +9,7 @@ This library is under development. Currently, only some special cases are suppor
 - [x] Float16 and BFloat16
 - [ ] More data types
 - [x] More shapes
-- [ ] Accelerate if no wgrad
+- [x] Optimize for no wgrad
 - [ ] Performance tuning
 
 

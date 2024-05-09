@@ -16,7 +16,7 @@ with open("README.md", "r") as fp:
 
 
 setup(name="faster_norm",
-      version="0.2.1",
+      version="0.2.2",
       author="Tailing Yuan",
       author_email="yuantailing@gmail.com",
       url="https://github.com/yuantailing/faster-norm",

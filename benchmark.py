@@ -39,7 +39,8 @@ dgrad_ref = hidden_states_float.grad.to(hidden_states.dtype)
 wgrad_ref = weight_float.grad.to(weight.dtype)
 
 
-for do_backward in [False, True]:
+for do_backward in ["", "[input]", "[input]+[weight]"]:
+    weight.requires_grad_("[weight]" in do_backward)
     for _ in range(5):
         for name, fn in [
             ("rms_norm_native", rms_norm),
@@ -67,10 +68,11 @@ for do_backward in [False, True]:
             ev2.record()
             ev2.synchronize()
             dt = ev1.elapsed_time(ev2) / 1000. / run_times
-            bw = hidden_states.numel() * hidden_states.element_size() * (2 + do_backward * 3) / dt
+            bw = hidden_states.numel() * hidden_states.element_size() * (5 if do_backward else 2) / dt
             print(f"{name:20s}", f"{bw / 2**30:8.3f} GiB/s", end=" ")
             print((output - output_ref).abs().mean().item(), end=" ")
             if do_backward:
                 print((hidden_states.grad - dgrad_ref).abs().mean().item(), end=" ")
-                print((weight.grad - wgrad_ref).abs().mean().item(), end=" ")
+                if weight.requires_grad:
+                    print((weight.grad - wgrad_ref).abs().mean().item(), end=" ")
             print()
