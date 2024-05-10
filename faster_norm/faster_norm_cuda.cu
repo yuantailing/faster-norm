@@ -269,6 +269,112 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
     }
 }
 
+template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, bool REQUIRES_WGRAD, typename T>
+__global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ bias, T const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
+    static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
+    using T2 = typename PackTwo<T>::type;
+
+    float frag_grad_weight_buffer[H / BLOCK_DIM_X];
+    if constexpr (REQUIRES_WGRAD) {
+        memset(frag_grad_weight_buffer, 0, sizeof(frag_grad_weight_buffer));
+    }
+
+    T2 frag_weight[H / 2 / BLOCK_DIM_X];
+    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+        int widx = i * BLOCK_DIM_X + threadIdx.x;
+        if (widx * 2 < h) {
+            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
+        }
+    }
+
+    for (int i_b = 0; i_b < ROWS_PER_CTA; i_b++) {
+        int b_id = blockIdx.x * ROWS_PER_CTA + i_b;
+
+        float sum_x = 0.f;
+        float sum_x2 = 0.f;
+        float sum_dyw = 0.f;
+        float sum_xdyw = 0.f;
+
+        T2 frag_input[H / 2 / BLOCK_DIM_X];
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                T2 inp = reinterpret_cast<T2 const *>(input)[b_id * h / 2 + widx];
+                sum_x += (float)inp.x + (float)inp.y;
+                frag_input[i] = inp;
+            }
+        }
+        sum_x = blockReduceSum(sum_x);
+        __shared__ float shared_mean;
+        if (threadIdx.x == 0) {
+            shared_mean = sum_x / h;
+        }
+        __syncthreads();
+        float mean = shared_mean;
+
+        T2 frag_grad_out[H / 2 / BLOCK_DIM_X];
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                int idx = b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x;
+                T2 inp = frag_input[i];
+                T2 grad_out = reinterpret_cast<T2 const *>(grad_output)[idx];
+                T2 w = frag_weight[i];
+                sum_x2 += ((float)inp.x - mean) * ((float)inp.x - mean) + ((float)inp.y - mean) * ((float)inp.y - mean);
+                sum_dyw += (float)grad_out.x * (float)w.x + (float)grad_out.y * (float)w.y;
+                sum_xdyw += ((float)inp.x - mean) * (float)grad_out.x * (float)w.x + ((float)inp.y - mean) * (float)grad_out.y * (float)w.y;
+                frag_grad_out[i] = grad_out;
+            }
+        }
+
+        sum_x2 = blockReduceSum(sum_x2);
+        __syncthreads();
+        sum_dyw = blockReduceSum(sum_dyw);
+        __syncthreads();
+        sum_xdyw = blockReduceSum(sum_xdyw);
+        __shared__ float shared_rnorm;
+        __shared__ float shared_sum_dyw;
+        __shared__ float shared_sum_xdyw;
+        if (threadIdx.x == 0) {
+            shared_rnorm = rsqrtf(sum_x2 / h + eps);
+            shared_sum_dyw = sum_dyw;
+            shared_sum_xdyw = sum_xdyw;
+        }
+        __syncthreads();
+        float rnorm = shared_rnorm;
+        sum_dyw = shared_sum_dyw;
+        sum_xdyw = shared_sum_xdyw;
+
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                int idx = b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x;
+                T2 inp = frag_input[i];
+                T2 grad_out = frag_grad_out[i];
+                T2 w = frag_weight[i];
+                T2 grad_inp;
+                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - sum_dyw / h - ((float)inp.x - mean) * rnorm * rnorm * sum_xdyw / h);
+                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - sum_dyw / h - ((float)inp.y - mean) * rnorm * rnorm * sum_xdyw / h);
+                reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
+                if constexpr (REQUIRES_WGRAD) {
+                    frag_grad_weight_buffer[i * 2 + 0] += rnorm * ((float)inp.x - mean) * (float)grad_out.x;
+                    frag_grad_weight_buffer[i * 2 + 1] += rnorm * ((float)inp.y - mean) * (float)grad_out.y;
+                }
+            }
+        }
+    }
+
+    if constexpr (REQUIRES_WGRAD) {
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * h / 2 + widx] =
+                    reinterpret_cast<float2 const *>(frag_grad_weight_buffer)[i];
+            }
+        }
+    }
+}
+
 template<typename T>
 __global__ void sum_axis_0_kernel(T *__restrict__ output, float const *__restrict__ input, int rows, int64_t h) {
     using T2 = typename PackTwo<T>::type;
@@ -316,17 +422,12 @@ void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, in
     SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(768, 384)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(1 * 1024, 512)
     SWITCH_H(2 * 1024, 512)
-    SWITCH_H(3 * 1024, 512)
     SWITCH_H(4 * 1024, 512)
-    SWITCH_H(5 * 1024, 512)
     SWITCH_H(6 * 1024, 512)
     SWITCH_H(8 * 1024, 512)
-    SWITCH_H(10 * 1024, 512)
     SWITCH_H(12 * 1024, 512)
-    SWITCH_H(14 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
     SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
@@ -344,7 +445,16 @@ void layer_norm_fwd_cuda(T *output, T const *input, T const *weight, T const *bi
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
     }
+    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512)
+    SWITCH_H(2 * 1024, 512)
+    SWITCH_H(4 * 1024, 512)
+    SWITCH_H(6 * 1024, 512)
     SWITCH_H(8 * 1024, 512)
+    SWITCH_H(12 * 1024, 512)
+    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
 #undef SWITCH_H
 }
 
@@ -369,17 +479,44 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
     SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(768, 384)  // Decrease BLOCK_DIM_X due to line is short
     SWITCH_H(1 * 1024, 512)
     SWITCH_H(2 * 1024, 512)
-    SWITCH_H(3 * 1024, 512)
     SWITCH_H(4 * 1024, 512)
-    SWITCH_H(5 * 1024, 512)
     SWITCH_H(6 * 1024, 512)
     SWITCH_H(8 * 1024, 512)
-    SWITCH_H(10 * 1024, 512)
     SWITCH_H(12 * 1024, 512)
-    SWITCH_H(14 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
+#undef SWITCH_H
+}
+
+template<typename T>
+void layer_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer, T const *input, T const *weight, T const *bias, T const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream) {
+    if (h % 2 != 0) {
+        throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
+    }
+    constexpr int ROWS_PER_CTA = 8;
+#define SWITCH_H(H, BLOCK_DIM_X) \
+    if (h <= (H)) { \
+        BOOL_SWITCH(requires_wgrad, REQUIRES_WGRAD, [&] { \
+            layer_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, bias, grad_output, eps, b, h); \
+        }); \
+        if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
+        if (requires_wgrad) { \
+            sum_axis_0_kernel<<<(H) / 32, 1024, 0, stream>>>(grad_weight, grad_weight_buffer, b / ROWS_PER_CTA, h); \
+            if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
+        } \
+        return; \
+    }
+    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512)
+    SWITCH_H(2 * 1024, 512)
+    SWITCH_H(4 * 1024, 512)
+    SWITCH_H(6 * 1024, 512)
+    SWITCH_H(8 * 1024, 512)
+    SWITCH_H(12 * 1024, 512)
     SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
@@ -393,5 +530,8 @@ template void layer_norm_fwd_cuda(half *output, half const *input, half const *w
 
 template void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);
 template void rms_norm_bwd_cuda(half *grad_input, half *grad_weight, float *grad_weight_buffer, half const *input, half const *weight, half const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);
+
+template void layer_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *bias, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);
+template void layer_norm_bwd_cuda(half *grad_input, half *grad_weight, float *grad_weight_buffer, half const *input, half const *weight, half const *bias, half const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);
 
 }

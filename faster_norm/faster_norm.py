@@ -48,9 +48,10 @@ class FasterLayerNormFunc(torch.autograd.Function):
     def backward(ctx, grad_output):
         assert grad_output.is_contiguous()
         input, weight, bias = ctx.saved_tensors
-        grad_input = torch.zeros_like(input)
-        grad_weight = torch.zeros_like(weight)
-        grad_bias = torch.zeros_like(bias)
+        eps = ctx.eps
+        grad_input, grad_weight = faster_norm_ext.layer_norm_bwd(input.view(-1, input.shape[-1]), weight, bias, grad_output.view(-1, grad_output.shape[-1]), eps)
+        grad_input = grad_input.view_as(input)
+        grad_bias = grad_output
         return grad_input, grad_weight, grad_bias, None
 
 
