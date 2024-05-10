@@ -144,23 +144,31 @@ __global__ void layer_norm_fwd_kernel(T *__restrict__ output, T const *__restric
             if (widx * 2 < h) {
                 T2 inp = reinterpret_cast<T2 const *>(input)[b_id * h / 2 + widx];
                 sum_x += (float)inp.x + (float)inp.y;
-                sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
                 frag_input[i] = inp;
             }
         }
-
         sum_x = blockReduceSum(sum_x);
-        __syncthreads();
-        sum_x2 = blockReduceSum(sum_x2);
         __shared__ float shared_mean;
-        __shared__ float shared_multiplier;
         if (threadIdx.x == 0) {
-            float mean = sum_x / h;
-            shared_mean = mean;
-            shared_multiplier = rsqrtf(max(0.f, sum_x2 / h - mean * mean) + eps);
+            shared_mean = sum_x / h;
         }
         __syncthreads();
         float mean = shared_mean;
+
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                T2 inp = frag_input[i];
+                sum_x2 += ((float)inp.x - mean) * ((float)inp.x - mean) + ((float)inp.y - mean) * ((float)inp.y - mean);
+            }
+        }
+
+        sum_x2 = blockReduceSum(sum_x2);
+        __shared__ float shared_multiplier;
+        if (threadIdx.x == 0) {
+            shared_multiplier = rsqrtf(sum_x2 / h + eps);
+        }
+        __syncthreads();
         float multiplier = shared_multiplier;
 
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
