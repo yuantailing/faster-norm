@@ -31,6 +31,38 @@ torch::Tensor rms_norm_fwd(torch::Tensor input, torch::Tensor weight, float eps)
     return output;
 }
 
+torch::Tensor layer_norm_fwd(torch::Tensor input, torch::Tensor weight, torch::Tensor bias, float eps) {
+    if (input.dtype() != weight.dtype()) {
+        throw std::invalid_argument(std::string("dtype mismatch: input ") + c10::toString(input.dtype().toScalarType()) + " vs weight " + c10::toString(weight.dtype().toScalarType()));
+    }
+    if (input.dtype() != bias.dtype()) {
+        throw std::invalid_argument(std::string("dtype mismatch: input ") + c10::toString(input.dtype().toScalarType()) + " vs bias " + c10::toString(bias.dtype().toScalarType()));
+    }
+    int64_t b = input.size(0);
+    int64_t h = input.size(1);
+    torch::Tensor output = torch::empty_like(input);
+    cudaStream_t stream = at::cuda::getDefaultCUDAStream().stream();
+    if (input.dtype() == torch::kFloat16) {
+        layer_norm_fwd_cuda(
+            reinterpret_cast<half *>(output.data_ptr()),
+            reinterpret_cast<half *>(input.data_ptr()),
+            reinterpret_cast<half *>(weight.data_ptr()),
+            reinterpret_cast<half *>(bias.data_ptr()),
+            eps, b, h, stream);
+    } else if (input.dtype() == torch::kBFloat16) {
+        layer_norm_fwd_cuda(
+            reinterpret_cast<__nv_bfloat16 *>(output.data_ptr()),
+            reinterpret_cast<__nv_bfloat16 *>(input.data_ptr()),
+            reinterpret_cast<__nv_bfloat16 *>(weight.data_ptr()),
+            reinterpret_cast<__nv_bfloat16 *>(bias.data_ptr()),
+            eps, b, h, stream);
+    } else {
+        throw std::invalid_argument("unsupported dtype " + std::string(c10::toString(input.dtype().toScalarType())));
+    }
+    return output;
+
+}
+
 std::tuple<torch::Tensor, torch::Tensor> rms_norm_bwd(torch::Tensor input, torch::Tensor weight, torch::Tensor grad_output, float eps) {
     if (input.dtype() != weight.dtype()) {
         throw std::invalid_argument(std::string("dtype mismatch: input ") + c10::toString(input.dtype().toScalarType()) + " vs weight " + c10::toString(weight.dtype().toScalarType()));
@@ -75,5 +107,6 @@ std::tuple<torch::Tensor, torch::Tensor> rms_norm_bwd(torch::Tensor input, torch
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("rms_norm_fwd", &faster_norm::rms_norm_fwd, "rms_norm forward");
+  m.def("layer_norm_fwd", &faster_norm::layer_norm_fwd, "layer_norm forward");
   m.def("rms_norm_bwd", &faster_norm::rms_norm_bwd, "rms_norm backward");
 }

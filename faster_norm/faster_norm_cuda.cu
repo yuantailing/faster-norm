@@ -118,6 +118,66 @@ __global__ void rms_norm_fwd_kernel(T *__restrict__ output, T const *__restrict_
     }
 }
 
+template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, typename T>
+__global__ void layer_norm_fwd_kernel(T *__restrict__ output, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ bias, float eps, int64_t b, int64_t h) {
+    static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
+    using T2 = typename PackTwo<T>::type;
+
+    T2 frag_weight[H / 2 / BLOCK_DIM_X];
+    T2 frag_bias[H / 2 / BLOCK_DIM_X];
+    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+        int widx = i * BLOCK_DIM_X + threadIdx.x;
+        if (widx * 2 < h) {
+            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
+            frag_bias[i] = reinterpret_cast<T2 const *>(bias)[widx];
+        }
+    }
+
+    for (int i_b = 0; i_b < ROWS_PER_CTA; i_b++) {
+        int b_id = blockIdx.x * ROWS_PER_CTA + i_b;
+        float sum_x = 0.f;
+        float sum_x2 = 0.f;
+
+        T2 frag_input[H / 2 / BLOCK_DIM_X];
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                T2 inp = reinterpret_cast<T2 const *>(input)[b_id * h / 2 + widx];
+                sum_x += (float)inp.x + (float)inp.y;
+                sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
+                frag_input[i] = inp;
+            }
+        }
+
+        sum_x = blockReduceSum(sum_x);
+        __syncthreads();
+        sum_x2 = blockReduceSum(sum_x2);
+        __shared__ float shared_mean;
+        __shared__ float shared_multiplier;
+        if (threadIdx.x == 0) {
+            float mean = sum_x / h;
+            shared_mean = mean;
+            shared_multiplier = rsqrtf(max(0.f, sum_x2 / h - mean * mean) + eps);
+        }
+        __syncthreads();
+        float mean = shared_mean;
+        float multiplier = shared_multiplier;
+
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx * 2 < h) {
+                T2 inp = frag_input[i];
+                T2 w = frag_weight[i];
+                T2 bi = frag_bias[i];
+                T2 o;
+                o.x = ((float)inp.x - mean) * multiplier * (float)w.x + (float)bi.x;
+                o.y = ((float)inp.y - mean) * multiplier * (float)w.y + (float)bi.y;
+                reinterpret_cast<T2 *>(output)[b_id * h / 2 + i * BLOCK_DIM_X + threadIdx.x] = o;
+            }
+        }
+    }
+}
+
 template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, bool REQUIRES_WGRAD, typename T>
 __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
@@ -265,6 +325,22 @@ void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, in
 }
 
 template<typename T>
+void layer_norm_fwd_cuda(T *output, T const *input, T const *weight, T const *bias, float eps, int64_t b, int64_t h, cudaStream_t stream) {
+    if (h % 2 != 0) {
+        throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
+    }
+    constexpr int ROWS_PER_CTA = 4;
+#define SWITCH_H(H, BLOCK_DIM_X) \
+    if (h <= (H)) { \
+        layer_norm_fwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(output, input, weight, bias, eps, b, h); \
+        if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
+        return; \
+    }
+    SWITCH_H(8 * 1024, 512)
+#undef SWITCH_H
+}
+
+template<typename T>
 void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer, T const *input, T const *weight, T const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream) {
     if (h % 2 != 0) {
         throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
@@ -303,6 +379,9 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
 
 template void rms_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream);
 template void rms_norm_fwd_cuda(half *output, half const *input, half const *weight, float eps, int64_t b, int64_t h, cudaStream_t stream);
+
+template void layer_norm_fwd_cuda(__nv_bfloat16 *output, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *bias, float eps, int64_t b, int64_t h, cudaStream_t stream);
+template void layer_norm_fwd_cuda(half *output, half const *input, half const *weight, half const *bias, float eps, int64_t b, int64_t h, cudaStream_t stream);
 
 template void rms_norm_bwd_cuda(__nv_bfloat16 *grad_input, __nv_bfloat16 *grad_weight, float *grad_weight_buffer, __nv_bfloat16 const *input, __nv_bfloat16 const *weight, __nv_bfloat16 const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);
 template void rms_norm_bwd_cuda(half *grad_input, half *grad_weight, float *grad_weight_buffer, half const *input, half const *weight, half const *grad_output, float eps, int64_t b, int64_t h, bool requires_wgrad, cudaStream_t stream);

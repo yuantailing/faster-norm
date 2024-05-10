@@ -1,15 +1,16 @@
 import torch
 
-from apex.contrib.layer_norm.layer_norm import FastRMSNormFN
-from faster_norm import faster_rms_norm
+from apex.contrib.layer_norm.layer_norm import FastRMSNormFN, FastLayerNormFN
+from faster_norm import faster_rms_norm, faster_layer_norm
 
 
-torch.manual_seed(42)
+# torch.manual_seed(42)
 
-s, b, h = 8192, 1, 12288
+s, b, h = 8192, 1, 8192
 
-hidden_states = torch.randn(s, b, h, dtype=torch.bfloat16, device="cuda").requires_grad_()
+hidden_states = (100. + torch.randn(s, b, h, dtype=torch.bfloat16, device="cuda")).requires_grad_()
 weight = (1 + torch.rand(h, dtype=torch.bfloat16, device="cuda")).requires_grad_()
+bias = (1 + torch.rand(h, dtype=torch.bfloat16, device="cuda")).requires_grad_()
 eps = 1e-5
 grad_output = torch.randn(s, b, h, dtype=torch.bfloat16, device="cuda") + hidden_states.detach() * .01
 
@@ -23,30 +24,47 @@ def rms_norm(hidden_states, weight, variance_epsilon):
     return weight * hidden_states.to(input_dtype)
 
 
+def layer_norm(hidden_states, weight, bias, variance_epsilon):
+    return torch.nn.functional.layer_norm(hidden_states, weight.shape, weight, bias, variance_epsilon)
+
+
 rms_norm_compiled = torch.compile(rms_norm)
+layer_norm_compiled = torch.compile(layer_norm)
 
 
 def fast_rms_norm(x, gamma, epsilon):
     return FastRMSNormFN.apply(x, gamma, epsilon)
 
 
+def fast_layer_norm(x, gamma, beta, epsilon):
+    return FastLayerNormFN.apply(x, gamma, beta, epsilon)
+
+
 dtype_ref = torch.float64
 hidden_states_float = hidden_states.detach().to(dtype_ref).requires_grad_()
 weight_float = weight.detach().to(dtype_ref).requires_grad_()
-output_ref = rms_norm(hidden_states_float, weight_float, eps).to(hidden_states.dtype)
+bias_float = bias.detach().to(dtype_ref).requires_grad_()
+# output_ref = rms_norm(hidden_states_float, weight_float, eps).to(hidden_states.dtype)
+output_ref = layer_norm_compiled(hidden_states_float, weight_float, bias_float, eps).to(hidden_states.dtype)
 output_ref.backward(grad_output)
 dgrad_ref = hidden_states_float.grad.to(hidden_states.dtype)
 wgrad_ref = weight_float.grad.to(weight.dtype)
+bgrad_ref = bias_float.grad.to(bias.dtype)
 
 
-for do_backward in ["", "[input]", "[input]+[weight]"]:
+for do_backward in ["", "[input]", "[input]+[weight]+[bias]"]:
     weight.requires_grad_("[weight]" in do_backward)
+    bias.requires_grad_("[bias]" in do_backward)
     for _ in range(5):
         for name, fn in [
-            ("rms_norm_native", rms_norm),
-            ("rms_norm_compiled", rms_norm_compiled),
-            ("FastRMSNormFN", fast_rms_norm),
-            ("faster_rms_norm", faster_rms_norm),
+            # ("rms_norm_native", rms_norm),
+            # ("rms_norm_compiled", rms_norm_compiled),
+            # ("FastRMSNormFN", fast_rms_norm),
+            # ("faster_rms_norm", faster_rms_norm),
+            ("layer_norm_native", layer_norm),
+            ("layer_norm_compiled", layer_norm_compiled),
+            ("FastLayerNormFN", fast_layer_norm),
+            ("faster_layer_norm", faster_layer_norm),
         ]:
             warmup_times = 5
             run_times = 20
@@ -55,14 +73,16 @@ for do_backward in ["", "[input]", "[input]+[weight]"]:
             for _ in range(warmup_times):
                 hidden_states.grad = None
                 weight.grad = None
-                output = fn(hidden_states, weight, eps)
+                bias.grad = None
+                output = fn(hidden_states, weight, bias, eps)
                 if do_backward:
                     output.backward(grad_output)
             ev1.record()
             for _ in range(run_times):
                 hidden_states.grad = None
                 weight.grad = None
-                output = fn(hidden_states, weight, eps)
+                bias.grad = None
+                output = fn(hidden_states, weight, bias, eps)
                 if do_backward:
                     output.backward(grad_output)
             ev2.record()
