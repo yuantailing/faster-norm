@@ -414,21 +414,21 @@ void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, in
     }
     constexpr int ROWS_PER_CTA = 4;
 #define SWITCH_H(H, BLOCK_DIM_X) \
-    if (h <= (H)) { \
+    do { if (h <= (H)) { \
         rms_norm_fwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(output, input, weight, eps, b, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
-    }
-    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(1 * 1024, 512)
-    SWITCH_H(2 * 1024, 512)
-    SWITCH_H(4 * 1024, 512)
-    SWITCH_H(6 * 1024, 512)
-    SWITCH_H(8 * 1024, 512)
-    SWITCH_H(12 * 1024, 512)
-    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    } } while (0);
+    SWITCH_H(128, 64);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512);
+    SWITCH_H(2 * 1024, 512);
+    SWITCH_H(4 * 1024, 512);
+    SWITCH_H(6 * 1024, 512);
+    SWITCH_H(8 * 1024, 512);
+    SWITCH_H(12 * 1024, 512);
+    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
@@ -440,21 +440,21 @@ void layer_norm_fwd_cuda(T *output, T const *input, T const *weight, T const *bi
     }
     constexpr int ROWS_PER_CTA = 4;
 #define SWITCH_H(H, BLOCK_DIM_X) \
-    if (h <= (H)) { \
+    do { if (h <= (H)) { \
         layer_norm_fwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(output, input, weight, bias, eps, b, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
-    }
-    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(1 * 1024, 512)
-    SWITCH_H(2 * 1024, 512)
-    SWITCH_H(4 * 1024, 512)
-    SWITCH_H(6 * 1024, 512)
-    SWITCH_H(8 * 1024, 512)
-    SWITCH_H(12 * 1024, 512)
-    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    } } while (0)
+    SWITCH_H(128, 64);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512);
+    SWITCH_H(2 * 1024, 512);
+    SWITCH_H(4 * 1024, 512);
+    SWITCH_H(6 * 1024, 512);
+    SWITCH_H(8 * 1024, 512);
+    SWITCH_H(12 * 1024, 512);
+    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
 #undef SWITCH_H
 }
 
@@ -465,7 +465,7 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
     }
     constexpr int ROWS_PER_CTA = 8;
 #define SWITCH_H(H, BLOCK_DIM_X) \
-    if (h <= (H)) { \
+    do { if (h <= (H)) { \
         BOOL_SWITCH(requires_wgrad, REQUIRES_WGRAD, [&] { \
             rms_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, grad_output, eps, b, h); \
         }); \
@@ -475,17 +475,17 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
             if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         } \
         return; \
-    }
-    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(1 * 1024, 512)
-    SWITCH_H(2 * 1024, 512)
-    SWITCH_H(4 * 1024, 512)
-    SWITCH_H(6 * 1024, 512)
-    SWITCH_H(8 * 1024, 512)
-    SWITCH_H(12 * 1024, 512)
-    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    } } while (0)
+    SWITCH_H(128, 64);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512);
+    SWITCH_H(2 * 1024, 512);
+    SWITCH_H(4 * 1024, 512);
+    SWITCH_H(6 * 1024, 512);
+    SWITCH_H(8 * 1024, 512);
+    SWITCH_H(12 * 1024, 512);
+    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
@@ -497,7 +497,7 @@ void layer_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffe
     }
     constexpr int ROWS_PER_CTA = 8;
 #define SWITCH_H(H, BLOCK_DIM_X) \
-    if (h <= (H)) { \
+    do { if (h <= (H)) { \
         BOOL_SWITCH(requires_wgrad, REQUIRES_WGRAD, [&] { \
             layer_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, bias, grad_output, eps, b, h); \
         }); \
@@ -507,17 +507,18 @@ void layer_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffe
             if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         } \
         return; \
-    }
-    SWITCH_H(128, 64)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(256, 128)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(512, 256)  // Decrease BLOCK_DIM_X due to line is short
-    SWITCH_H(1 * 1024, 512)
-    SWITCH_H(2 * 1024, 512)
-    SWITCH_H(4 * 1024, 512)
-    SWITCH_H(6 * 1024, 512)
-    SWITCH_H(8 * 1024, 512)
-    SWITCH_H(12 * 1024, 512)
-    SWITCH_H(16 * 1024, 256)  // Decrease BLOCK_DIM_X due to no enough registers
+    } } while (0)
+    SWITCH_H(128, 64);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(256, 128);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(512, 256);  // Decrease BLOCK_DIM_X due to line is short
+    SWITCH_H(1 * 1024, 512);
+    SWITCH_H(2 * 1024, 512);
+    SWITCH_H(4 * 1024, 512);
+    SWITCH_H(6 * 1024, 512);
+    SWITCH_H(8 * 1024, 512);
+    if (requires_wgrad) SWITCH_H(12 * 1024, 256);
+    else SWITCH_H(12 * 1024, 512);
+    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
