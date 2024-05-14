@@ -33,5 +33,31 @@ class FasterRMSNormFunc(torch.autograd.Function):
         return grad_input, grad_weight, None
 
 
+class FasterLayerNormFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, weight, bias, eps):
+        assert input.is_contiguous()
+        assert weight.is_contiguous()
+        assert bias.is_contiguous()
+        output = faster_norm_ext.layer_norm_fwd(input.view(-1, input.shape[-1]), weight, bias, eps).view_as(input)
+        ctx.save_for_backward(input, weight, bias)
+        ctx.eps = eps
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        assert grad_output.is_contiguous()
+        input, weight, bias = ctx.saved_tensors
+        eps = ctx.eps
+        grad_input, grad_weight = faster_norm_ext.layer_norm_bwd(input.view(-1, input.shape[-1]), weight, bias, grad_output.view(-1, grad_output.shape[-1]), eps)
+        grad_input = grad_input.view_as(input)
+        grad_bias = grad_output
+        return grad_input, grad_weight, grad_bias, None
+
+
 def faster_rms_norm(input, weight, eps):
     return FasterRMSNormFunc.apply(input, weight, eps)
+
+
+def faster_layer_norm(input, weight, bias, eps):
+    return FasterLayerNormFunc.apply(input, weight, bias, eps)
