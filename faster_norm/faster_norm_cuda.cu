@@ -4,8 +4,8 @@
 #include <stdexcept>
 
 #include <cuda_runtime.h>
-#include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 namespace faster_norm {
 
