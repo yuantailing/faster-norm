@@ -247,8 +247,8 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
                 T2 grad_out = frag_grad_out[i];
                 T2 w = frag_weight[i];
                 T2 grad_inp;
-                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - (float)inp.x * rnorm * rnorm * sum_xdyw / h);
-                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - (float)inp.y * rnorm * rnorm * sum_xdyw / h);
+                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - rnorm / h * rnorm * sum_xdyw * (float)inp.x);
+                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - rnorm / h * rnorm * sum_xdyw * (float)inp.y);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
                     frag_grad_weight_buffer[i * 2 + 0] += rnorm * (float)inp.x * (float)grad_out.x;
@@ -353,8 +353,8 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
                 T2 grad_out = frag_grad_out[i];
                 T2 w = frag_weight[i];
                 T2 grad_inp;
-                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - sum_dyw / h - ((float)inp.x - mean) * rnorm * rnorm * sum_xdyw / h);
-                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - sum_dyw / h - ((float)inp.y - mean) * rnorm * rnorm * sum_xdyw / h);
+                grad_inp.x = rnorm * (float)w.x * (float)grad_out.x - rnorm / h * sum_dyw - (rnorm / h * rnorm * rnorm * sum_xdyw) * ((float)inp.x - mean);
+                grad_inp.y = rnorm * (float)w.y * (float)grad_out.y - rnorm / h * sum_dyw - (rnorm / h * rnorm * rnorm * sum_xdyw) * ((float)inp.y - mean);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
                     frag_grad_weight_buffer[i * 2 + 0] += rnorm * ((float)inp.x - mean) * (float)grad_out.x;

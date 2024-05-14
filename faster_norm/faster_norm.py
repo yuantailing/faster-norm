@@ -8,7 +8,7 @@ srcpath = pathlib.Path(__file__).parent.absolute()
 faster_norm_ext = torch.utils.cpp_extension.load(
     "faster_norm_ext",
     sources=[srcpath / "faster_norm.cpp", srcpath / "faster_norm_cuda.cu"],
-    extra_cuda_cflags=["-U__CUDA_NO_HALF_CONVERSIONS__", "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__", "-O2", "-fmad=false"],
+    extra_cuda_cflags=["-U__CUDA_NO_HALF_CONVERSIONS__", "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "-U__CUDA_NO_BFLOAT16_OPERATORS__", "-O2", "-fmad=true"],
     verbose=1,
 )
 
