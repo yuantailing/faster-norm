@@ -190,6 +190,7 @@ template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, bool REQUIRES_WGRAD, typename
 __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
     using T2 = typename PackTwo<T>::type;
+    float rh = 1.f / h;
 
     float frag_grad_weight_buffer[H / BLOCK_DIM_X];
     if constexpr (REQUIRES_WGRAD) {
@@ -232,7 +233,7 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
         __shared__ float shared_rnorm;
         __shared__ float shared_sum_xdyw;
         if (threadIdx.x == 0) {
-            shared_rnorm = rsqrtf(sum_x2 / h + eps);
+            shared_rnorm = rsqrtf(sum_x2 * rh + eps);
             shared_sum_xdyw = sum_xdyw;
         }
         __syncthreads();
@@ -247,8 +248,8 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
                 T2 grad_out = frag_grad_out[i];
                 T2 w = frag_weight[i];
                 T2 grad_inp;
-                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - rnorm / h * rnorm * sum_xdyw * (float)inp.x);
-                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - rnorm / h * rnorm * sum_xdyw * (float)inp.y);
+                grad_inp.x = rnorm * ((float)w.x * (float)grad_out.x - rnorm * rh * rnorm * sum_xdyw * (float)inp.x);
+                grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - rnorm * rh * rnorm * sum_xdyw * (float)inp.y);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
                     frag_grad_weight_buffer[i * 2 + 0] += rnorm * (float)inp.x * (float)grad_out.x;
@@ -273,6 +274,7 @@ template<int ROWS_PER_CTA, int BLOCK_DIM_X, int H, bool REQUIRES_WGRAD, typename
 __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restrict__ grad_weight_buffer, T const *__restrict__ input, T const *__restrict__ weight, T const *__restrict__ bias, T const *__restrict__ grad_output, float eps, int64_t b, int64_t h) {
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
     using T2 = typename PackTwo<T>::type;
+    float rh = 1.f / h;
 
     float frag_grad_weight_buffer[H / BLOCK_DIM_X];
     if constexpr (REQUIRES_WGRAD) {
@@ -307,7 +309,7 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
         sum_x = blockReduceSum(sum_x);
         __shared__ float shared_mean;
         if (threadIdx.x == 0) {
-            shared_mean = sum_x / h;
+            shared_mean = sum_x * rh;
         }
         __syncthreads();
         float mean = shared_mean;
@@ -336,7 +338,7 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
         __shared__ float shared_sum_dyw;
         __shared__ float shared_sum_xdyw;
         if (threadIdx.x == 0) {
-            shared_rnorm = rsqrtf(sum_x2 / h + eps);
+            shared_rnorm = rsqrtf(sum_x2 * rh + eps);
             shared_sum_dyw = sum_dyw;
             shared_sum_xdyw = sum_xdyw;
         }
@@ -353,8 +355,8 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
                 T2 grad_out = frag_grad_out[i];
                 T2 w = frag_weight[i];
                 T2 grad_inp;
-                grad_inp.x = rnorm * (float)w.x * (float)grad_out.x - rnorm / h * sum_dyw - (rnorm / h * rnorm * rnorm * sum_xdyw) * ((float)inp.x - mean);
-                grad_inp.y = rnorm * (float)w.y * (float)grad_out.y - rnorm / h * sum_dyw - (rnorm / h * rnorm * rnorm * sum_xdyw) * ((float)inp.y - mean);
+                grad_inp.x = rnorm * (float)w.x * (float)grad_out.x - rnorm * rh * sum_dyw - (rnorm * rh * rnorm * rnorm * sum_xdyw) * ((float)inp.x - mean);
+                grad_inp.y = rnorm * (float)w.y * (float)grad_out.y - rnorm * rh * sum_dyw - (rnorm * rh * rnorm * rnorm * sum_xdyw) * ((float)inp.y - mean);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
                     frag_grad_weight_buffer[i * 2 + 0] += rnorm * ((float)inp.x - mean) * (float)grad_out.x;
