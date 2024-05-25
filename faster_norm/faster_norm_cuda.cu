@@ -75,14 +75,6 @@ __global__ void rms_norm_fwd_kernel(T *__restrict__ output, T const *__restrict_
     using T2 = typename PackTwo<T>::type;
     float rh = 1.f / h;
 
-    T2 frag_weight[H / 2 / BLOCK_DIM_X];
-    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
-        int widx = i * BLOCK_DIM_X + threadIdx.x;
-        if (widx < (h / 2)) {
-            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
-        }
-    }
-
     for (int i_b = 0; i_b < ROWS_PER_CTA; i_b++) {
         int b_id = blockIdx.x * ROWS_PER_CTA + i_b;
         float sum_x2 = 0.f;
@@ -109,7 +101,7 @@ __global__ void rms_norm_fwd_kernel(T *__restrict__ output, T const *__restrict_
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx < (h / 2)) {
                 T2 inp = frag_input[i];
-                T2 w = frag_weight[i];
+                T2 w = reinterpret_cast<T2 const *>(weight)[widx];
                 T2 o;
                 o.x = (float)inp.x * multiplier * (float)w.x;
                 o.y = (float)inp.y * multiplier * (float)w.y;
@@ -124,21 +116,6 @@ __global__ void layer_norm_fwd_kernel(T *__restrict__ output, T const *__restric
     static_assert(H % (2 * BLOCK_DIM_X) == 0, "not implemented: ceil_div required");
     using T2 = typename PackTwo<T>::type;
     float rh = 1.f / h;
-
-    T2 frag_weight[H / 2 / BLOCK_DIM_X];
-    T2 frag_bias[H / 2 / BLOCK_DIM_X];
-    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
-        int widx = i * BLOCK_DIM_X + threadIdx.x;
-        if (widx < (h / 2)) {
-            frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
-        }
-    }
-    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
-        int widx = i * BLOCK_DIM_X + threadIdx.x;
-        if (widx < (h / 2)) {
-            frag_bias[i] = reinterpret_cast<T2 const *>(bias)[widx];
-        }
-    }
 
     for (int i_b = 0; i_b < ROWS_PER_CTA; i_b++) {
         int b_id = blockIdx.x * ROWS_PER_CTA + i_b;
@@ -182,8 +159,8 @@ __global__ void layer_norm_fwd_kernel(T *__restrict__ output, T const *__restric
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx < (h / 2)) {
                 T2 inp = frag_input[i];
-                T2 w = frag_weight[i];
-                T2 bi = frag_bias[i];
+                T2 w = reinterpret_cast<T2 const *>(weight)[widx];
+                T2 bi = reinterpret_cast<T2 const *>(bias)[widx];
                 T2 o;
                 o.x = ((float)inp.x - mean) * multiplier * (float)w.x + (float)bi.x;
                 o.y = ((float)inp.y - mean) * multiplier * (float)w.y + (float)bi.y;
@@ -440,21 +417,22 @@ void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, in
     if (h % 2 != 0) {
         throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
     }
-    constexpr int ROWS_PER_CTA = 4;
+    constexpr int ROWS_PER_CTA = 1;
 #define SWITCH_H(H, BLOCK_DIM_X) \
     do { if (h <= (H)) { \
         rms_norm_fwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(output, input, weight, eps, b, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
     } } while (0);
-    SWITCH_H(512, 32);
+    SWITCH_H(128, 32);
+    SWITCH_H(512, 64);
     SWITCH_H(1 * 1024, 64);
     SWITCH_H(2 * 1024, 128);
     SWITCH_H(4 * 1024, 256);
-    SWITCH_H(6 * 1024, 512);
-    SWITCH_H(8 * 1024, 512);
-    SWITCH_H(12 * 1024, 1024);
-    SWITCH_H(16 * 1024, 1024);
+    SWITCH_H(6 * 1024, 256);
+    SWITCH_H(8 * 1024, 256);
+    SWITCH_H(12 * 1024, 256);
+    SWITCH_H(16 * 1024, 256);
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
@@ -464,21 +442,22 @@ void layer_norm_fwd_cuda(T *output, T const *input, T const *weight, T const *bi
     if (h % 2 != 0) {
         throw std::invalid_argument("no support odd h (" + std::to_string(h) + ")");
     }
-    constexpr int ROWS_PER_CTA = 4;
+    constexpr int ROWS_PER_CTA = 1;
 #define SWITCH_H(H, BLOCK_DIM_X) \
     do { if (h <= (H)) { \
         layer_norm_fwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(output, input, weight, bias, eps, b, h); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         return; \
     } } while (0)
-    SWITCH_H(512, 32);
+    SWITCH_H(128, 32);
+    SWITCH_H(512, 64);
     SWITCH_H(1 * 1024, 64);
     SWITCH_H(2 * 1024, 128);
     SWITCH_H(4 * 1024, 256);
-    SWITCH_H(6 * 1024, 512);
-    SWITCH_H(8 * 1024, 512);
-    SWITCH_H(12 * 1024, 1024);
-    SWITCH_H(16 * 1024, 1024);
+    SWITCH_H(6 * 1024, 256);
+    SWITCH_H(8 * 1024, 256);
+    SWITCH_H(12 * 1024, 256);
+    SWITCH_H(16 * 1024, 256);
 #undef SWITCH_H
 }
 
