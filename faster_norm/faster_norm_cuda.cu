@@ -194,9 +194,13 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
     using T2 = typename PackTwo<T>::type;
     float rh = 1.f / h;
 
-    float frag_grad_weight_buffer[H / BLOCK_DIM_X];
+    extern __shared__ float smem_dynamic[];
+    typedef __shared__ float (*Smem2D)[BLOCK_DIM_X];
+    Smem2D smem_grad_weight_buffer = reinterpret_cast<Smem2D>(smem_dynamic);
     if constexpr (REQUIRES_WGRAD) {
-        memset(frag_grad_weight_buffer, 0, sizeof(frag_grad_weight_buffer));
+        for (int i = 0; i < H / BLOCK_DIM_X; i++) {
+            smem_grad_weight_buffer[i][threadIdx.x] = 0.f;
+        }
     }
 
     T2 frag_weight[H / 2 / BLOCK_DIM_X];
@@ -254,8 +258,8 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
                 grad_inp.y = rnorm * ((float)w.y * (float)grad_out.y - rnorm * rh * rnorm * sum_xdyw * (float)inp.y);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
-                    frag_grad_weight_buffer[i * 2 + 0] += rnorm * (float)inp.x * (float)grad_out.x;
-                    frag_grad_weight_buffer[i * 2 + 1] += rnorm * (float)inp.y * (float)grad_out.y;
+                    smem_grad_weight_buffer[i * 2 + 0][threadIdx.x] += rnorm * (float)inp.x * (float)grad_out.x;
+                    smem_grad_weight_buffer[i * 2 + 1][threadIdx.x] += rnorm * (float)inp.y * (float)grad_out.y;
                 }
             }
         }
@@ -265,8 +269,10 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx < (h / 2)) {
-                reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * (h / 2) + i * BLOCK_DIM_X + threadIdx.x] =
-                    reinterpret_cast<float2 const *>(frag_grad_weight_buffer)[i];
+                reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * (h / 2) + i * BLOCK_DIM_X + threadIdx.x] = {
+                    smem_grad_weight_buffer[i * 2 + 0][threadIdx.x],
+                    smem_grad_weight_buffer[i * 2 + 1][threadIdx.x],
+                };
             }
         }
     }
@@ -278,9 +284,13 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
     using T2 = typename PackTwo<T>::type;
     float rh = 1.f / h;
 
-    float frag_grad_weight_buffer[H / BLOCK_DIM_X];
+    extern __shared__ float smem_dynamic[];
+    typedef __shared__ float (*Smem2D)[BLOCK_DIM_X];
+    Smem2D smem_grad_weight_buffer = reinterpret_cast<Smem2D>(smem_dynamic);
     if constexpr (REQUIRES_WGRAD) {
-        memset(frag_grad_weight_buffer, 0, sizeof(frag_grad_weight_buffer));
+        for (int i = 0; i < H / BLOCK_DIM_X; i++) {
+            smem_grad_weight_buffer[i][threadIdx.x] = 0.f;
+        }
     }
 
     T2 frag_weight[H / 2 / BLOCK_DIM_X];
@@ -361,8 +371,8 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
                 grad_inp.y = rnorm * (float)w.y * (float)grad_out.y - rnorm * rh * sum_dyw - (rnorm * rh * rnorm * rnorm * sum_xdyw) * ((float)inp.y - mean);
                 reinterpret_cast<T2 *>(grad_input)[idx] = grad_inp;
                 if constexpr (REQUIRES_WGRAD) {
-                    frag_grad_weight_buffer[i * 2 + 0] += rnorm * ((float)inp.x - mean) * (float)grad_out.x;
-                    frag_grad_weight_buffer[i * 2 + 1] += rnorm * ((float)inp.y - mean) * (float)grad_out.y;
+                    smem_grad_weight_buffer[i * 2 + 0][threadIdx.x] += rnorm * ((float)inp.x - mean) * (float)grad_out.x;
+                    smem_grad_weight_buffer[i * 2 + 1][threadIdx.x] += rnorm * ((float)inp.y - mean) * (float)grad_out.y;
                 }
             }
         }
@@ -372,8 +382,10 @@ __global__ void layer_norm_bwd_kernel(T *__restrict__ grad_input, float *__restr
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx < (h / 2)) {
-                reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * (h / 2) + i * BLOCK_DIM_X + threadIdx.x] =
-                    reinterpret_cast<float2 const *>(frag_grad_weight_buffer)[i];
+                reinterpret_cast<float2 *>(grad_weight_buffer)[blockIdx.x * (h / 2) + i * BLOCK_DIM_X + threadIdx.x] = {
+                    smem_grad_weight_buffer[i * 2 + 0][threadIdx.x],
+                    smem_grad_weight_buffer[i * 2 + 1][threadIdx.x],
+                };
             }
         }
     }
@@ -471,7 +483,16 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
 #define SWITCH_H(H, BLOCK_DIM_X) \
     do { if (h <= (H)) { \
         BOOL_SWITCH(requires_wgrad, REQUIRES_WGRAD, [&] { \
-            rms_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, grad_output, eps, b, h); \
+            constexpr auto kernel_fn = rms_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD, T>; \
+            constexpr int smem_bytes = REQUIRES_WGRAD ? (H) * sizeof(float) : 0; \
+            if constexpr (smem_bytes >= 0xc000) { \
+                static bool once = [&]() { \
+                    cudaError_t err_code = cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes); \
+                    if (err_code != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
+                    return true; \
+                }(); \
+            } \
+            kernel_fn<<<b / ROWS_PER_CTA, BLOCK_DIM_X, smem_bytes, stream>>>(grad_input, grad_weight_buffer, input, weight, grad_output, eps, b, h); \
         }); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         if (requires_wgrad) { \
@@ -503,7 +524,16 @@ void layer_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffe
 #define SWITCH_H(H, BLOCK_DIM_X) \
     do { if (h <= (H)) { \
         BOOL_SWITCH(requires_wgrad, REQUIRES_WGRAD, [&] { \
-            layer_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD><<<b / ROWS_PER_CTA, BLOCK_DIM_X, 0, stream>>>(grad_input, grad_weight_buffer, input, weight, bias, grad_output, eps, b, h); \
+            constexpr auto kernel_fn = layer_norm_bwd_kernel<ROWS_PER_CTA, BLOCK_DIM_X, H, REQUIRES_WGRAD, T>; \
+            constexpr int smem_bytes = REQUIRES_WGRAD ? (H) * sizeof(float) : 0; \
+            if constexpr (smem_bytes >= 0xc000) { \
+                static bool once = [&]() { \
+                    cudaError_t err_code = cudaFuncSetAttribute(kernel_fn, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_bytes); \
+                    if (err_code != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
+                    return true; \
+                }(); \
+            } \
+            kernel_fn<<<b / ROWS_PER_CTA, BLOCK_DIM_X, smem_bytes, stream>>>(grad_input, grad_weight_buffer, input, weight, bias, grad_output, eps, b, h); \
         }); \
         if (cudaPeekAtLastError() != cudaSuccess) { fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(cudaPeekAtLastError()), __FILE__, __LINE__); abort(); } \
         if (requires_wgrad) { \
