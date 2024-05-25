@@ -131,6 +131,11 @@ __global__ void layer_norm_fwd_kernel(T *__restrict__ output, T const *__restric
         int widx = i * BLOCK_DIM_X + threadIdx.x;
         if (widx < (h / 2)) {
             frag_weight[i] = reinterpret_cast<T2 const *>(weight)[widx];
+        }
+    }
+    for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+        int widx = i * BLOCK_DIM_X + threadIdx.x;
+        if (widx < (h / 2)) {
             frag_bias[i] = reinterpret_cast<T2 const *>(bias)[widx];
         }
     }
@@ -218,17 +223,24 @@ __global__ void rms_norm_bwd_kernel(T *__restrict__ grad_input, float *__restric
         float sum_xdyw = 0.f;
 
         T2 frag_input[H / 2 / BLOCK_DIM_X];
-        T2 frag_grad_out[H / 2 / BLOCK_DIM_X];
         for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
             int widx = i * BLOCK_DIM_X + threadIdx.x;
             if (widx < (h / 2)) {
                 int idx = b_id * (h / 2) + i * BLOCK_DIM_X + threadIdx.x;
                 T2 inp = reinterpret_cast<T2 const *>(input)[idx];
+                sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
+                frag_input[i] = inp;
+            }
+        }
+        T2 frag_grad_out[H / 2 / BLOCK_DIM_X];
+        for (int i = 0; i * 2 * BLOCK_DIM_X < H; i++) {
+            int widx = i * BLOCK_DIM_X + threadIdx.x;
+            if (widx < (h / 2)) {
+                int idx = b_id * (h / 2) + i * BLOCK_DIM_X + threadIdx.x;
+                T2 inp = frag_input[i];
                 T2 grad_out = reinterpret_cast<T2 const *>(grad_output)[idx];
                 T2 w = frag_weight[i];
-                sum_x2 += (float)inp.x * (float)inp.x + (float)inp.y * (float)inp.y;
                 sum_xdyw += (float)inp.x * (float)grad_out.x * (float)w.x + (float)inp.y * (float)grad_out.y * (float)w.y;
-                frag_input[i] = inp;
                 frag_grad_out[i] = grad_out;
             }
         }
