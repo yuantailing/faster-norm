@@ -444,7 +444,7 @@ void rms_norm_fwd_cuda(T *output, T const *input, T const *weight, float eps, in
     SWITCH_H(6 * 1024, 512);
     SWITCH_H(8 * 1024, 512);
     SWITCH_H(12 * 1024, 512);
-    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
+    SWITCH_H(16 * 1024, 512);
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
@@ -470,7 +470,7 @@ void layer_norm_fwd_cuda(T *output, T const *input, T const *weight, T const *bi
     SWITCH_H(6 * 1024, 512);
     SWITCH_H(8 * 1024, 512);
     SWITCH_H(12 * 1024, 512);
-    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
+    SWITCH_H(16 * 1024, 512);
 #undef SWITCH_H
 }
 
@@ -510,7 +510,7 @@ void rms_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffer,
     SWITCH_H(6 * 1024, 512);
     SWITCH_H(8 * 1024, 512);
     SWITCH_H(12 * 1024, 512);
-    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
+    SWITCH_H(16 * 1024, 512);
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
@@ -550,9 +550,8 @@ void layer_norm_bwd_cuda(T *grad_input, T *grad_weight, float *grad_weight_buffe
     SWITCH_H(4 * 1024, 512);
     SWITCH_H(6 * 1024, 512);
     SWITCH_H(8 * 1024, 512);
-    if (requires_wgrad) SWITCH_H(12 * 1024, 256);
-    else SWITCH_H(12 * 1024, 512);
-    SWITCH_H(16 * 1024, 256);  // Decrease BLOCK_DIM_X due to no enough registers
+    SWITCH_H(12 * 1024, 512);
+    SWITCH_H(16 * 1024, 512);
     throw std::invalid_argument("h is too large (" + std::to_string(h) + ")");
 #undef SWITCH_H
 }
